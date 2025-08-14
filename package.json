@@ -1,0 +1,12 @@
+{
+  "name": "familien-app-pwa",
+  "version": "1.0.0",
+  "description": "Eine Familien PWA",
+  "license": "ISC",
+  "author": "Jan",
+  "type": "commonjs",
+  "main": "sw.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
