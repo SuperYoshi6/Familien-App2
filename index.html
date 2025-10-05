@@ -126,7 +126,6 @@
           <div class="flex gap-3">
             <label class="flex items-center gap-2"><input type="radio" name="reg-role" value="eltern" required/> Elternteil</label>
             <label class="flex items-center gap-2"><input type="radio" name="reg-role" value="kind"/> Kind</label>
-            <label class="flex items-center gap-2"><input type="radio" name="reg-role" value="admin"/> Admin</label>
           </div>
           <div class="flex gap-2">
             <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white" type="submit">Konto anlegen</button>
@@ -138,6 +137,22 @@
 
     <!-- TABS -->
     <main id="tabs" class="space-y-6 hidden with-sidebar">
+      <!-- Willkommen -->
+      <section id="welcome" class="card p-8">
+        <h2 class="text-2xl font-bold mb-2">Willkommen zurück, <span id="welcome-name"></span>! 👋</h2>
+        <p class="text-slate-500 mb-4">Wähle deinen Bereich, um loszulegen.</p>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <button data-tab="family-cal" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">👪 Familienkalender</button>
+          <button data-tab="my-cal" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">📅 Mein Kalender</button>
+          <button data-tab="news" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">📰 News</button>
+          <button data-tab="weather" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">🌦 Wetter</button>
+          <button data-tab="todos" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">✅ To‑Dos</button>
+          <button data-tab="chores" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">🧹 Hausarbeiten</button>
+          <button data-tab="food" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">🍽️ Essen</button>
+          <button data-tab="settings" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400">⚙️ Einstellungen</button>
+          <button data-tab="admin" id="welcome-admin" class="px-4 py-4 rounded-xl border text-left hover:border-indigo-400 hidden">🛡 Admin</button>
+        </div>
+      </section>
       <!-- Familienkalender -->
       <section data-panel="family-cal" class="card p-5">
         <div class="flex items-center justify-between">
@@ -326,10 +341,12 @@
 
   <script>
     // ---------------- CONFIG ----------------
+    // Hinweis: Niemals echte geheime API-Keys im Client ausliefern. Nutze einen Proxy/Server oder Domain-Restriktionen.
+    // Wetter: nutzt nun Open-Meteo (kein API-Key erforderlich)
     const SUPABASE_URL = 'https://hjkmfodzhradtkeiyele.supabase.co'; // <-- setze hier deine Werte
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqa21mb2R6aHJhZHRrZWl5ZWxlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI0ODIwNjEsImV4cCI6MjA2ODA1ODA2MX0.2cfezsLcT6x3KI9VqzrHntP80O-cy0JQUb7UK3Mnai8';
-    const WEATHER_API_KEY = 'a00136db1232d2004edd6421151bd519';
     const WEATHER_CITY = 'Alzey,de';
+    const ENABLE_FORECAST = true; // Open-Meteo Vorhersage aktivieren/deaktivieren
 
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -348,8 +365,8 @@
     document.getElementById('btn-theme').addEventListener('click', ()=> setTheme(root.getAttribute('data-theme')==='dark'?'light':'dark'));
     document.getElementById('toggle-dark').addEventListener('change', (e)=> setTheme(e.target.checked?'dark':'light'));
 
-    // ServiceWorker registration: nur wenn sw.js auf dem Server liegt
-    if('serviceWorker' in navigator && window.isSecureContext){ (async ()=>{ try{ const res = await fetch('./sw.js', { method: 'HEAD' }); if(res.ok) await navigator.serviceWorker.register('./sw.js'); }catch(e){ console.warn('SW skipped', e); } })(); }
+    // ServiceWorker registration: nur auf HTTPS oder localhost
+    if('serviceWorker' in navigator && (location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1')){ (async ()=>{ try{ const res = await fetch('./sw.js', { method: 'HEAD' }); if(res.ok) await navigator.serviceWorker.register('./sw.js'); }catch(e){ console.warn('SW skipped', e); } })(); }
 
     // Optional: SW-Datei herunterladen, damit du sie in dein Projekt legen kannst
     const SW_SOURCE = `// sw.js — einfacher Cache & Network-Fallback
@@ -372,6 +389,12 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
     const logoutBtn = document.getElementById('btn-logout');
     const roleBadge = document.getElementById('role-badge');
 
+    // Simple HTML escaping to mitigate XSS in user-provided content
+    function escapeHTML(str){
+      if(str == null) return '';
+      return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
     // ---------------- DEMO ACCOUNT ----------------
     async function ensureDemoAccount(){
       try{
@@ -381,7 +404,7 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
           const pwHash = bcrypt.hashSync('demo123', 10);
           await sb.from('users').insert([{ username: 'demo', password_hash: pwHash, role: 'eltern' }]);
         }
-      }catch(err){ console.error(err); }
+      }catch(err){ console.error('ensureDemoAccount fehlgeschlagen. Stelle sicher, dass das SQL-Schema erstellt wurde.', err); }
     }
 
     // ---------------- AUTH: register/login ----------------
@@ -421,11 +444,22 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
     async function afterLogin(){
       const user = session.get(); if(!user) return;
       document.getElementById('tab-admin').classList.toggle('hidden', user.role!=='admin');
+      const wa = document.getElementById('welcome-admin'); if(wa) wa.classList.toggle('hidden', user.role!=='admin');
       roleBadge.textContent = `Deine Rolle: ${user.role}`;
+
+      // Hide login, prepare content
       elAuth.classList.add('hidden');
+      // hide all panels first, show welcome
+      document.querySelectorAll('[data-panel]').forEach(p=> p.classList.add('hidden'));
+      const welcome = document.getElementById('welcome');
+      if(welcome){ const wn = document.getElementById('welcome-name'); if(wn) wn.textContent = user.username; welcome.classList.remove('hidden'); }
+
+      // now show app shell
       tabs.classList.remove('hidden');
       logoutBtn.classList.remove('hidden');
-      loadMonth(currentMonth);
+
+      // Preload data
+      loadMonth(dayjs().startOf('month'));
       loadMyEvents();
       loadNews();
       loadTodos();
@@ -434,13 +468,23 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
       loadWeather();
     }
 
-    if(session.get()) afterLogin();
-
-    // ---------------- TABS via SIDEBAR ----------------
+    
+    // ---------------- TABS via SIDEBAR + WELCOME ----------------
+    function showTab(tab){
+      const welcome = document.getElementById('welcome');
+      if(welcome) welcome.classList.add('hidden');
+      document.querySelectorAll('[data-panel]').forEach(p=> p.classList.toggle('hidden', p.dataset.panel!==tab));
+      try{ localStorage.setItem('lastTab', tab); }catch(e){}
+    }
+    // Sidebar buttons
     document.querySelectorAll('#sidebar [data-tab]').forEach(btn=> btn.addEventListener('click', ()=>{
       const tab = btn.dataset.tab;
-      document.querySelectorAll('[data-panel]').forEach(p=> p.classList.toggle('hidden', p.dataset.panel!==tab));
+      showTab(tab);
       sidebar.classList.remove('open'); backdrop.classList.remove('show');
+    }));
+    // Welcome buttons
+    document.querySelectorAll('#welcome [data-tab]').forEach(btn=> btn.addEventListener('click', ()=>{
+      showTab(btn.dataset.tab);
     }));
 
     // ---------------- CALENDAR ----------------
@@ -472,14 +516,28 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
       renderMonth(date);
       const start = date.startOf('month').toISOString();
       const end = date.endOf('month').toISOString();
-      const { data, error } = await sb.from('family_calendar').select('*').gte('start_date', start).lte('end_date', end).order('start_date');
+      const { data, error } = await sb.from('family_calendar').select('*').lte('start_date', end).gte('end_date', start).order('start_date');
       if(error) return console.warn(error);
-      // place events
+      // place events (render across all overlapping days)
       const cells = Array.from(monthGrid.querySelectorAll('.cal-cell'));
       data.forEach(evt=>{
-        const idx = dayjs(evt.start_date).date()-1;
-        const ul = cells[idx]?.querySelector('ul');
-        if(ul){ const li = document.createElement('li'); li.innerHTML = `<strong>${evt.title}</strong><div class="text-xs text-slate-500">${dayjs(evt.start_date).format('HH:mm')}–${dayjs(evt.end_date).format('HH:mm')}</div>`; ul.appendChild(li); }
+        const evtStart = dayjs(evt.start_date).startOf('day');
+        const evtEnd = dayjs(evt.end_date).startOf('day');
+        const monthStart = dayjs(start).startOf('day');
+        const monthEnd = dayjs(end).startOf('day');
+        const renderStart = evtStart.isBefore(monthStart) ? monthStart : evtStart;
+        const renderEnd = evtEnd.isAfter(monthEnd) ? monthEnd : evtEnd;
+        const days = renderEnd.diff(renderStart, 'day');
+        for(let i=0;i<=days;i++){
+          const d = renderStart.add(i,'day');
+          const idx = d.date()-1;
+          const ul = cells[idx]?.querySelector('ul');
+          if(ul){
+            const li = document.createElement('li');
+            li.innerHTML = `<strong>${escapeHTML(evt.title)}</strong><div class="text-xs text-slate-500">${dayjs(evt.start_date).format('HH:mm')}–${dayjs(evt.end_date).format('HH:mm')}</div>`;
+            ul.appendChild(li);
+          }
+        }
       });
     }
 
@@ -538,7 +596,7 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
       const { data, error } = await sb.from('family_calendar').select('*').or(`created_by.eq.${user.id},target_users.cs.{${user.id}}`).order('start_date');
       if(error) return console.warn(error);
       const ul = document.getElementById('my-events'); ul.innerHTML='';
-      data.forEach(evt=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; li.innerHTML=`<div class="font-medium">${evt.title}</div><div class="text-xs text-slate-500">${dayjs(evt.start_date).format('DD.MM.YYYY HH:mm')} – ${dayjs(evt.end_date).format('DD.MM.YYYY HH:mm')}</div><div>${evt.description||''}</div>`; ul.appendChild(li); });
+      data.forEach(evt=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; li.innerHTML=`<div class="font-medium">${escapeHTML(evt.title)}</div><div class="text-xs text-slate-500">${dayjs(evt.start_date).format('DD.MM.YYYY HH:mm')} – ${dayjs(evt.end_date).format('DD.MM.YYYY HH:mm')}</div><div>${escapeHTML(evt.description||'')}</div>`; ul.appendChild(li); });
     }
 
     // ---------------- NEWS ----------------
@@ -550,7 +608,15 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
       const content = document.getElementById('news-body').value.trim();
       const file = document.getElementById('news-image').files[0];
       let image_url = null;
-      if(file){ const path = `news/${user.id}-${Date.now()}-${file.name}`; const up = await sb.storage.from('assets').upload(path, file); if(up.error) return alert(up.error.message); image_url = sb.storage.from('assets').getPublicUrl(path).data.publicUrl; }
+      if(file){
+        if(!file.type.startsWith('image/')){ alert('Bitte ein Bild hochladen.'); return; }
+        if(file.size > 5*1024*1024){ alert('Bild zu groß (max. 5MB).'); return; }
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `news/${user.id}-${Date.now()}-${safeName}`;
+        const up = await sb.storage.from('assets').upload(path, file);
+        if(up.error) return alert(up.error.message);
+        image_url = sb.storage.from('assets').getPublicUrl(path).data.publicUrl;
+      }
       const { error } = await sb.from('news').insert([{ title, content, image_url, tags, created_by: user.id }]);
       if(error) return alert('Fehler: '+ error.message);
       loadNews(); e.target.reset();
@@ -560,37 +626,92 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
       const { data, error } = await sb.from('news').select('*').order('created_at', { ascending:false });
       if(error) return console.warn(error);
       const wrap = document.getElementById('news-list'); wrap.innerHTML='';
-      data.forEach(n=>{ const card=document.createElement('article'); card.className='rounded-lg overflow-hidden border'; card.innerHTML=`${n.image_url?`<img src="${n.image_url}" class="w-full h-40 object-cover">`:''}<div class="p-3"><h3 class="font-semibold">${n.title}</h3><div class="text-xs text-slate-500 mb-2">${new Date(n.created_at).toLocaleString()}</div><p class="text-sm">${n.content}</p><div class="mt-2">${(n.tags||[]).map(t=>`<span class='chip mr-1'>${t}</span>`).join('')}</div></div>`; wrap.appendChild(card); });
+      data.forEach(n=>{
+        const card = document.createElement('article');
+        card.className = 'rounded-lg overflow-hidden border';
+
+        if (n.image_url) {
+          const img = document.createElement('img');
+          img.className = 'w-full h-40 object-cover';
+          img.src = n.image_url; // property assignment avoids HTML injection
+          card.appendChild(img);
+        }
+
+        const inner = document.createElement('div');
+        inner.className = 'p-3';
+
+        const h3 = document.createElement('h3');
+        h3.className = 'font-semibold';
+        h3.textContent = n.title || '';
+        inner.appendChild(h3);
+
+        const meta = document.createElement('div');
+        meta.className = 'text-xs text-slate-500 mb-2';
+        meta.textContent = new Date(n.created_at).toLocaleString();
+        inner.appendChild(meta);
+
+        const p = document.createElement('p');
+        p.className = 'text-sm';
+        p.textContent = n.content || '';
+        inner.appendChild(p);
+
+        const tagsWrap = document.createElement('div');
+        tagsWrap.className = 'mt-2';
+        (n.tags||[]).forEach(t=>{
+          const span = document.createElement('span');
+          span.className = 'chip mr-1';
+          span.textContent = t;
+          tagsWrap.appendChild(span);
+        });
+        inner.appendChild(tagsWrap);
+
+        card.appendChild(inner);
+        wrap.appendChild(card);
+      });
     }
 
-    // ---------------- WEATHER (Pixel Weather‑like) ----------------
+    // ---------------- WEATHER (Open-Meteo) ----------------
     async function loadWeather(){
       try{
-        const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(WEATHER_CITY)}&appid=${WEATHER_API_KEY}&units=metric&lang=de`);
-        const cur = await res.json();
         const box = document.getElementById('weather-now');
-        if(cur.cod!==200){ box.textContent='Wetter konnte nicht geladen werden.'; return; }
-        document.getElementById('weather-update').textContent = new Date().toLocaleString();
-        const icon = cur.weather?.[0]?.icon || '01d';
-        box.innerHTML = `<div class="flex items-center gap-4"><img src="https://openweathermap.org/img/wn/${icon}@2x.png" width="64" height="64"/><div><div class="text-3xl font-bold">${Math.round(cur.main.temp)}°C</div><div class="text-sm text-slate-500">${cur.weather?.[0]?.description||''}</div><div class="text-xs text-slate-400">${cur.name}</div><div class="text-xs mt-1">gefühlte ${Math.round(cur.main.feels_like)}°C · ${Math.round(cur.main.temp_min)}° / ${Math.round(cur.main.temp_max)}°</div></div></div>`;
-
-        // 7‑Tage Vorhersage via OneCall (Koordinaten aus current)
-        const { lon, lat } = cur.coord;
-        const res2 = await fetch(`https://api.openweathermap.org/data/2.5/onecall?lat=${lat}&lon=${lon}&exclude=minutely,hourly,alerts&units=metric&lang=de&appid=${WEATHER_API_KEY}`);
-        const oc = await res2.json();
         const grid = document.getElementById('weather-7'); grid.innerHTML='';
-        (oc.daily||[]).slice(0,7).forEach(d=>{
-          const dt = dayjs.unix(d.dt);
-          const card = document.createElement('div');
-          card.className='rounded-xl border p-3 text-center';
-          card.innerHTML = `
-            <div class="text-xs text-slate-500">${dt.format('dd')}</div>
-            <img class="mx-auto" src="https://openweathermap.org/img/wn/${d.weather?.[0]?.icon||'01d'}.png" alt=""/>
-            <div class="text-sm font-semibold">${Math.round(d.temp.max)}° / ${Math.round(d.temp.min)}°</div>
-            <div class="text-xs">gefühlt ${Math.round(d.feels_like.day)}°</div>
-          `;
-          grid.appendChild(card);
-        });
+        // Geocoding für Stadtname -> Koordinaten
+        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(WEATHER_CITY)}&count=1&language=de&format=json`);
+        const geo = await geoRes.json();
+        if(!geo || !geo.results || geo.results.length===0){ box.textContent='Ort nicht gefunden.'; return; }
+        const loc = geo.results[0];
+        const lat = loc.latitude, lon = loc.longitude;
+        const placeName = [loc.name, loc.admin1, loc.country_code].filter(Boolean).join(', ');
+
+        // Forecast + Current Weather von Open-Meteo
+        const res2 = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max&timezone=auto&forecast_days=7`);
+        if(!res2.ok){ box.textContent='Wetter konnte nicht geladen werden.'; grid.innerHTML = '<div class="text-sm text-slate-500">Vorhersage nicht verfügbar.</div>'; return; }
+        const data = await res2.json();
+        document.getElementById('weather-update').textContent = new Date().toLocaleString();
+
+        // Mapping für Wettercode
+        function codeToIcon(code){ const map={0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',53:'🌦️',55:'🌧️',56:'🌧️',57:'🌧️',61:'🌧️',63:'🌧️',65:'🌧️',66:'🌧️',67:'🌧️',71:'🌨️',73:'🌨️',75:'❄️',77:'❄️',80:'🌦️',81:'🌧️',82:'🌧️',85:'🌨️',86:'❄️',95:'⛈️',96:'⛈️',99:'⛈️'}; return map[code]||'🌡️'; }
+
+        // Aktuelles Wetter
+        const cw = data.current_weather;
+        box.innerHTML = `<div class="flex items-center gap-4"><div class="text-4xl">${codeToIcon(cw.weathercode)}</div><div><div class="text-3xl font-bold">${Math.round(cw.temperature)}°C</div><div class="text-xs text-slate-400">${escapeHTML(placeName)}</div></div></div>`;
+
+        // 7‑Tage Vorhersage
+        if(ENABLE_FORECAST && data.daily){
+          const len = data.daily.time.length;
+          for(let i=0;i<Math.min(7,len);i++){
+            const dt = dayjs(data.daily.time[i]);
+            const max = Math.round(data.daily.temperature_2m_max[i]);
+            const min = Math.round(data.daily.temperature_2m_min[i]);
+            const wc = data.daily.weathercode[i];
+            const card = document.createElement('div');
+            card.className='rounded-xl border p-3 text-center';
+            card.innerHTML = `<div class="text-xs text-slate-500">${dt.format('dd')}</div><div class="text-2xl">${codeToIcon(wc)}</div><div class="text-sm font-semibold">${max}° / ${min}°</div>`;
+            grid.appendChild(card);
+          }
+        } else {
+          grid.innerHTML = '<div class="text-sm text-slate-500">Vorhersage deaktiviert.</div>';
+        }
       }catch(e){ console.warn(e); }
     }
 
@@ -617,7 +738,7 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
 
     async function loadChores(){
       const { data, error } = await sb.from('chores').select('*').order('due_date'); if(error) return console.warn(error);
-      const ul=document.getElementById('chore-list'); ul.innerHTML=''; data.forEach(c=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; const meta=`${c.priority?.toUpperCase()||''} ${c.due_date? '· fällig '+ new Date(c.due_date).toLocaleDateString():''}`; li.innerHTML=`<div class=\"font-medium\">${c.title}</div><div class=\"text-xs text-slate-500 mb-2\">${meta}</div>`; const btn=document.createElement('button'); btn.className='px-3 py-1 rounded-lg bg-emerald-600 text-white'; btn.textContent='Erledigt markieren'; btn.onclick=async ()=>{ await sb.from('chore_status').insert([{ chore_id: c.id }]); btn.disabled=true; btn.textContent='Erledigt'; }; li.appendChild(btn); if(Array.isArray(c.assigned_users) && c.assigned_users.length){ const small=document.createElement('div'); small.className='text-xs text-slate-500 mt-2'; small.textContent='Zugewiesen an '+c.assigned_users.length+' Nutzer'; li.appendChild(small); } ul.appendChild(li); });
+      const ul=document.getElementById('chore-list'); ul.innerHTML=''; data.forEach(c=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; const meta=`${c.priority?.toUpperCase()||''} ${c.due_date? '· fällig '+ new Date(c.due_date).toLocaleDateString():''}`; li.innerHTML=`<div class=\"font-medium\">${escapeHTML(c.title)}</div><div class=\"text-xs text-slate-500 mb-2\">${meta}</div>`; const btn=document.createElement('button'); btn.className='px-3 py-1 rounded-lg bg-emerald-600 text-white'; btn.textContent='Erledigt markieren'; btn.onclick=async ()=>{ await sb.from('chore_status').insert([{ chore_id: c.id, user_id: session.get().id }]); btn.disabled=true; btn.textContent='Erledigt'; }; li.appendChild(btn); if(Array.isArray(c.assigned_users) && c.assigned_users.length){ const small=document.createElement('div'); small.className='text-xs text-slate-500 mt-2'; small.textContent='Zugewiesen an '+c.assigned_users.length+' Nutzer'; li.appendChild(small); } ul.appendChild(li); });
     }
 
     // ---------------- FOOD ----------------
@@ -626,7 +747,7 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
     });
 
     async function loadOrders(){
-      const { data, error } = await sb.from('meals').select('*').order('created_at', {ascending:false}); if(error) return console.warn(error); const ul=document.getElementById('food-orders'); ul.innerHTML=''; data.forEach(o=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border flex items-center justify-between'; li.innerHTML=`<div><div class=\"font-medium\">${o.meal_name}</div><div class=\"text-xs text-slate-500\">${new Date(o.created_at).toLocaleString()}</div></div>`; ul.appendChild(li); });
+      const { data, error } = await sb.from('meals').select('*').order('created_at', {ascending:false}); if(error) return console.warn(error); const ul=document.getElementById('food-orders'); ul.innerHTML=''; data.forEach(o=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border flex items-center justify-between'; li.innerHTML=`<div><div class=\"font-medium\">${escapeHTML(o.meal_name)}</div><div class=\"text-xs text-slate-500\">${new Date(o.created_at).toLocaleString()}</div></div>`; ul.appendChild(li); });
     }
 
     // ---------------- FEEDBACK / ADMIN ----------------
@@ -635,7 +756,7 @@ self.addEventListener('fetch', event=>{ if(event.request.method!=='GET') return;
 
     document.getElementById('form-reset-pass').addEventListener('submit', async (e)=>{ e.preventDefault(); const user = session.get(); if(!user || user.role!=='admin') return alert('Nur Admin'); const uname = document.getElementById('reset-username').value.trim(); const npass = document.getElementById('reset-password').value; const pwHash = bcrypt.hashSync(npass, 10); const { error } = await sb.from('users').update({ password_hash: pwHash }).eq('username', uname); if(error) return alert(error.message); alert('Passwort gesetzt'); });
 
-    async function loadFeedback(){ const user = session.get(); if(!user || user.role!=='admin') return; const { data, error } = await sb.from('feedback').select('*').order('created_at', {ascending:false}); if(error) return console.warn(error); const ul = document.getElementById('feedback-list'); ul.innerHTML=''; data.forEach(f=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; li.innerHTML=`<div>${f.message}</div><div class=\"text-xs text-slate-500 mt-1\">${new Date(f.created_at).toLocaleString()}</div>`; ul.appendChild(li); }); }
+    async function loadFeedback(){ const user = session.get(); if(!user || user.role!=='admin') return; const { data, error } = await sb.from('feedback').select('*').order('created_at', {ascending:false}); if(error) return console.warn(error); const ul = document.getElementById('feedback-list'); ul.innerHTML=''; data.forEach(f=>{ const li=document.createElement('li'); li.className='p-3 rounded-lg border'; li.innerHTML=`<div>${escapeHTML(f.message)}</div><div class=\"text-xs text-slate-500 mt-1\">${new Date(f.created_at).toLocaleString()}</div>`; ul.appendChild(li); }); }
 
     // ---------------- SQL SCHEMA ----------------
     const SQL = `-- SCHEMA (kopieren in Supabase SQL Editor)
@@ -675,7 +796,10 @@ create table if not exists todos (
   created_at timestamptz default now()
 );
 
-create type chore_priority as enum ('niedrig','mittel','hoch');
+do $ begin
+  create type chore_priority as enum ('niedrig','mittel','hoch');
+exception when duplicate_object then null;
+end $;
 create table if not exists chores (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -708,6 +832,29 @@ create table if not exists feedback (
   created_by uuid references users(id),
   created_at timestamptz default now()
 );
+
+-- Enable Row Level Security (RLS)
+alter table users enable row level security;
+alter table family_calendar enable row level security;
+alter table news enable row level security;
+alter table todos enable row level security;
+alter table chores enable row level security;
+alter table chore_status enable row level security;
+alter table meals enable row level security;
+alter table feedback enable row level security;
+
+-- TODO: Füge restriktive RLS-Policies pro Tabelle hinzu (abhängig von deinem Auth-Modell).
+-- Beispiele (an Supabase Auth angepasst; bei Custom-Auth sind andere Bedingungen nötig):
+-- create policy "news_read" on news for select using (true);
+-- create policy "todos_rw_own" on todos
+--   for all
+--   using (user_id = auth.uid())
+--   with check (user_id = auth.uid());
+-- create policy "calendar_read_overlap" on family_calendar
+--   for select using (true); -- oder restriktiver je nach Zielgruppe
+-- create policy "chore_status_insert_by_logged_in" on chore_status
+--   for insert with check (auth.uid() is not null);
+
 `;
     document.getElementById('sql-block').textContent = SQL;
 
